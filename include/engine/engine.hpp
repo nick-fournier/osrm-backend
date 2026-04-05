@@ -119,7 +119,21 @@ template <typename Algorithm> class Engine final : public EngineInterface
   private:
     template <typename ParametersT> auto GetAlgorithms(const ParametersT &params) const
     {
-        return RoutingAlgorithms<Algorithm>{heaps, facade_provider->Get(params)};
+        auto facade = facade_provider->Get(params);
+
+        // Set per-query multi-period context on MLD facade (mutable fields)
+        if constexpr (std::is_same_v<Algorithm, routing_algorithms::mld::Algorithm> &&
+                      std::is_base_of_v<api::BaseParameters, ParametersT>)
+        {
+            if (params.departure_period)
+                facade->query_departure_period = *params.departure_period;
+            if (params.period_duration)
+                facade->query_period_duration = *params.period_duration;
+            if (params.departure_time_offset)
+                facade->query_departure_offset = *params.departure_time_offset;
+        }
+
+        return RoutingAlgorithms<Algorithm>{heaps, std::move(facade)};
     }
     std::unique_ptr<DataFacadeProvider<Algorithm>> facade_provider;
     mutable SearchEngineData<Algorithm> heaps;
