@@ -106,11 +106,11 @@ template <> class AlgorithmDataFacade<MLD>
     virtual bool HasMultiplePeriods() const { return false; }
     virtual std::size_t GetNumPeriods() const { return 0; }
 
-    // Per-query period context (set before search, read during relaxOutgoingEdges).
-    // Mutable because facade is const-shared but period context is per-query.
-    mutable std::size_t query_departure_period = 0;
-    mutable double query_period_duration = 0; // seconds per period (0 = disabled)
-    mutable double query_departure_offset = 0; // seconds into departure period
+    // Per-query period context — thread_local for TBB-safe parallel routing.
+    // Set in Engine::GetAlgorithms() before each Route() call, read during search.
+    static inline thread_local std::size_t query_departure_period = 0;
+    static inline thread_local double query_period_duration = 0; // seconds per period (0 = disabled)
+    static inline thread_local double query_departure_offset = 0; // seconds into departure period
 
     // Compute period index from accumulated travel time (EdgeWeight is in deci-seconds)
     std::size_t GetPeriodForWeight(EdgeWeight accumulated_weight) const
