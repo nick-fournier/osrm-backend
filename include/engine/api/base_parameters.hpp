@@ -89,6 +89,15 @@ struct BaseParameters
 
     SnappingType snapping = SnappingType::Default;
 
+    // Multi-period routing: departure period index and elapsed time (seconds) within period.
+    // Used by MLD forward search to switch cell metrics when accumulated travel time
+    // crosses a period boundary.
+    std::optional<std::size_t> departure_period;
+    // Period duration in seconds (e.g. 900 for 15-min periods). Required if departure_period set.
+    std::optional<double> period_duration;
+    // Departure time offset within the period, in seconds (0 = start of period).
+    std::optional<double> departure_time_offset;
+
     BaseParameters(std::vector<util::Coordinate> coordinates_ = {},
                    std::vector<std::optional<Hint>> hints_ = {},
                    std::vector<std::optional<double>> radiuses_ = {},

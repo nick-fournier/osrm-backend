@@ -98,6 +98,31 @@ template <> class AlgorithmDataFacade<MLD>
 
     virtual const customizer::CellMetricView &GetCellMetric() const = 0;
 
+    // Multi-period: get metric for a specific period. Default falls back to base metric.
+    virtual const customizer::CellMetricView &GetCellMetric(std::size_t /*period*/) const
+    {
+        return GetCellMetric();
+    }
+    virtual bool HasMultiplePeriods() const { return false; }
+    virtual std::size_t GetNumPeriods() const { return 0; }
+
+    // Per-query period context (set before search, read during relaxOutgoingEdges).
+    // Mutable because facade is const-shared but period context is per-query.
+    mutable std::size_t query_departure_period = 0;
+    mutable double query_period_duration = 0; // seconds per period (0 = disabled)
+    mutable double query_departure_offset = 0; // seconds into departure period
+
+    // Compute period index from accumulated travel time (EdgeWeight is in deci-seconds)
+    std::size_t GetPeriodForWeight(EdgeWeight accumulated_weight) const
+    {
+        if (query_period_duration <= 0)
+            return query_departure_period;
+        double elapsed_seconds = static_cast<double>(static_cast<std::int32_t>(accumulated_weight)) / 10.0;
+        double total_seconds = query_departure_offset + elapsed_seconds;
+        auto periods_elapsed = static_cast<std::size_t>(total_seconds / query_period_duration);
+        return query_departure_period + periods_elapsed;
+    }
+
     virtual EdgeRange GetBorderEdgeRange(const LevelID level,
                                          const NodeID edge_based_node_id) const = 0;
 

@@ -702,7 +702,7 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
 
     // Multi-period metric access: returns metric for given period.
     // Falls back to base (period 0) if period has no stored metrics (sparse).
-    const customizer::CellMetricView &GetCellMetric(std::size_t period) const
+    const customizer::CellMetricView &GetCellMetric(std::size_t period) const override
     {
         if (period < mld_period_metrics.size() && mld_period_metrics[period].weights.size() > 0)
         {
@@ -716,8 +716,8 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
         return mld_cell_metric;
     }
 
-    bool HasMultiplePeriods() const { return mld_period_metrics.size() > 1; }
-    std::size_t GetNumPeriods() const { return mld_period_metrics.size(); }
+    bool HasMultiplePeriods() const override { return mld_period_metrics.size() > 1; }
+    std::size_t GetNumPeriods() const override { return mld_period_metrics.size(); }
 
     // search graph access
     unsigned GetNumberOfNodes() const override final { return query_graph.GetNumberOfNodes(); }

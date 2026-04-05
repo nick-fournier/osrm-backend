@@ -298,7 +298,21 @@ void relaxOutgoingEdges(const DataFacade<Algorithm> &facade,
 {
     const auto &partition = facade.GetMultiLevelPartition();
     const auto &cells = facade.GetCellStorage();
-    const auto &metric = facade.GetCellMetric();
+
+    // Multi-period forward search: select metric based on accumulated travel time.
+    // Backward search always uses departure period (frozen-cost approximation).
+    const auto &metric = [&]() -> const auto &
+    {
+        if constexpr (DIRECTION == FORWARD_DIRECTION)
+        {
+            if (facade.HasMultiplePeriods() && facade.query_period_duration > 0)
+            {
+                auto period = facade.GetPeriodForWeight(heapNode.weight);
+                return facade.GetCellMetric(period);
+            }
+        }
+        return facade.GetCellMetric();
+    }();
 
     const auto level = getNodeQueryLevel(partition, heapNode.node, args...);
 
