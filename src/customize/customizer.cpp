@@ -157,15 +157,21 @@ int Customizer::Run(const CustomizationConfig &config,
         periods.emplace_back(0, speed_path);
     }
 
-    // Customize each period, accumulate metrics
-    std::vector<std::pair<std::size_t, std::vector<CellMetric>>> all_period_metrics;
-    all_period_metrics.reserve(periods.size());
+    // Customize each period, accumulate metrics and node weights.
+    // Period 0 becomes the base graph; periods 1+ store sparse weight deltas.
+    struct PeriodData
+    {
+        std::size_t period_index;
+        std::vector<CellMetric> metrics;
+        std::vector<EdgeWeight> node_weights;
+        std::vector<EdgeDuration> node_durations;
+        std::vector<EdgeDistance> node_distances;
+    };
+    std::vector<PeriodData> all_periods;
+    all_periods.reserve(periods.size());
 
     std::uint32_t connectivity_checksum = 0;
-    std::vector<EdgeWeight> last_node_weights;
-    std::vector<EdgeDuration> last_node_durations;
-    std::vector<EdgeDistance> last_node_distances;
-    partitioner::MultiLevelEdgeBasedGraph last_graph;
+    partitioner::MultiLevelEdgeBasedGraph base_graph;
 
     for (const auto &[period_index, speed_csv_path] : periods)
     {
@@ -185,16 +191,18 @@ int Customizer::Run(const CustomizationConfig &config,
                       node_weights.end(),
                       [](auto &w) { w &= EdgeWeight{0x7fffffff}; });
 
-        if (all_period_metrics.empty())
+        if (all_periods.empty())
         {
             util::Log() << "Loaded edge based graph: " << graph.GetNumberOfEdges() << " edges, "
                         << graph.GetNumberOfNodes() << " nodes";
             partitioner::printCellStatistics(mlp, storage);
+            base_graph = std::move(graph);
         }
 
         auto filter =
-            util::excludeFlagsToNodeFilter(graph.GetNumberOfNodes(), node_data, properties);
-        auto metrics = customizeFilteredMetrics(graph, storage, CellCustomizer{mlp}, filter);
+            util::excludeFlagsToNodeFilter(node_weights.size(), node_data, properties);
+        auto metrics = customizeFilteredMetrics(
+            all_periods.empty() ? base_graph : graph, storage, CellCustomizer{mlp}, filter);
 
         TIMER_STOP(period_customize);
         util::Log() << "Period " << period_index << " customization took "
@@ -205,40 +213,71 @@ int Customizer::Run(const CustomizationConfig &config,
             printUnreachableStatistics(mlp, storage, metric);
         }
 
-        all_period_metrics.emplace_back(period_index, std::move(metrics));
-
-        last_node_weights = std::move(node_weights);
-        last_node_durations = std::move(node_durations);
-        last_node_distances = std::move(node_distances);
-        last_graph = std::move(graph);
+        all_periods.push_back({period_index,
+                               std::move(metrics),
+                               std::move(node_weights),
+                               std::move(node_durations),
+                               std::move(node_distances)});
     }
 
     // Write cell metrics
     TIMER_START(writing_mld_data);
     if (multi_period)
     {
+        std::vector<std::pair<std::size_t, std::vector<CellMetric>>> metric_pairs;
+        for (auto &pd : all_periods)
+            metric_pairs.emplace_back(pd.period_index, std::move(pd.metrics));
         files::writeMultiPeriodCellMetrics(
-            config.GetPath(".osrm.cell_metrics"), properties.GetWeightName(), all_period_metrics);
+            config.GetPath(".osrm.cell_metrics"), properties.GetWeightName(), metric_pairs);
     }
     else
     {
-        // Legacy format for backward compat with non-period-aware OSRM
         std::unordered_map<std::string, std::vector<CellMetric>> metric_exclude_classes = {
-            {properties.GetWeightName(), std::move(all_period_metrics[0].second)},
+            {properties.GetWeightName(), std::move(all_periods[0].metrics)},
         };
         files::writeCellMetrics(config.GetPath(".osrm.cell_metrics"), metric_exclude_classes);
     }
     TIMER_STOP(writing_mld_data);
     util::Log() << "MLD customization writing took " << TIMER_SEC(writing_mld_data) << " seconds";
 
-    // Write graph (topology is same across periods, edge weights from last)
+    // Write graph with period 0 weights as the base
     TIMER_START(writing_graph);
-    MultiLevelEdgeBasedGraph shaved_graph{std::move(last_graph),
-                                          std::move(last_node_weights),
-                                          std::move(last_node_durations),
-                                          std::move(last_node_distances)};
-    customizer::files::writeGraph(
-        config.GetPath(".osrm.mldgr"), shaved_graph, connectivity_checksum);
+    // Save base weight refs before moving into graph
+    const auto &base_weights = all_periods[0].node_weights;
+    const auto &base_durations = all_periods[0].node_durations;
+    // Make a copy for delta computation since graph construction moves them
+    auto base_weights_copy = base_weights;
+    auto base_durations_copy = base_durations;
+
+    MultiLevelEdgeBasedGraph shaved_graph{std::move(base_graph),
+                                          std::move(all_periods[0].node_weights),
+                                          std::move(all_periods[0].node_durations),
+                                          std::move(all_periods[0].node_distances)};
+    if (multi_period && all_periods.size() > 1)
+    {
+        std::vector<std::pair<std::size_t,
+                              std::pair<const std::vector<EdgeWeight> *,
+                                        const std::vector<EdgeDuration> *>>>
+            period_refs;
+        for (std::size_t i = 1; i < all_periods.size(); ++i)
+        {
+            period_refs.emplace_back(
+                all_periods[i].period_index,
+                std::make_pair(&all_periods[i].node_weights, &all_periods[i].node_durations));
+        }
+        customizer::files::writeGraphWithDeltas(
+            config.GetPath(".osrm.mldgr"),
+            shaved_graph,
+            connectivity_checksum,
+            base_weights_copy,
+            base_durations_copy,
+            period_refs);
+    }
+    else
+    {
+        customizer::files::writeGraph(
+            config.GetPath(".osrm.mldgr"), shaved_graph, connectivity_checksum);
+    }
     TIMER_STOP(writing_graph);
     util::Log() << "Graph writing took " << TIMER_SEC(writing_graph) << " seconds";
 

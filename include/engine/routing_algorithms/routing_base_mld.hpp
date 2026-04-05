@@ -429,8 +429,28 @@ void relaxOutgoingEdges(const DataFacade<Algorithm> &facade,
             if (!facade.ExcludeNode(to) &&
                 checkParentCellRestriction(partition.GetCell(level + 1, to), args...))
             {
-                const auto node_weight =
-                    facade.GetNodeWeight(DIRECTION == FORWARD_DIRECTION ? heapNode.node : to);
+                const auto weight_node =
+                    DIRECTION == FORWARD_DIRECTION ? heapNode.node : to;
+
+                // Use period-aware weight when multi-period routing is active
+                EdgeWeight node_weight;
+                if constexpr (DIRECTION == FORWARD_DIRECTION)
+                {
+                    if (facade.HasMultiplePeriods() && facade.query_period_duration > 0)
+                    {
+                        auto period = facade.GetPeriodForWeight(heapNode.weight);
+                        node_weight = facade.GetNodeWeight(weight_node, period);
+                    }
+                    else
+                    {
+                        node_weight = facade.GetNodeWeight(weight_node);
+                    }
+                }
+                else
+                {
+                    node_weight = facade.GetNodeWeight(weight_node);
+                }
+
                 const auto turn_penalty = facade.GetWeightPenaltyForEdgeID(edge_data.turn_id);
 
                 // TODO: BOOST_ASSERT(edge_data.weight == node_weight + turn_penalty);

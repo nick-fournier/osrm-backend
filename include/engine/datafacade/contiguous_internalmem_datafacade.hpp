@@ -652,6 +652,10 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
     customizer::CellMetricView mld_cell_metric;
     // Multi-period: indexed by period. Empty vector means single-period mode.
     std::vector<customizer::CellMetricView> mld_period_metrics;
+    // Per-period weight deltas: period_index -> (node_id -> (weight_delta, duration_delta))
+    // Only non-base periods stored. Empty means single-period or no deltas.
+    std::vector<std::unordered_map<std::uint32_t, std::pair<EdgeWeight, EdgeDuration>>>
+        mld_weight_deltas;
     using QueryGraph = customizer::MultiLevelEdgeBasedGraphView;
     using GraphNode = QueryGraph::NodeArrayEntry;
     using GraphEdge = QueryGraph::EdgeArrayEntry;
@@ -676,6 +680,9 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
             mld_period_metrics = make_period_cell_metric_views(
                 index, "/mld/metrics/" + metric_name, exclude_index, num_periods);
         }
+
+        // Load per-period weight deltas if present
+        mld_weight_deltas = load_weight_deltas(index);
     }
 
     // allocator that keeps the allocation data
@@ -741,9 +748,38 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
         return query_graph.GetNodeWeight(edge_based_node_id);
     }
 
+    // Period-aware node weight: applies stored deltas for the given period.
+    EdgeWeight GetNodeWeight(const NodeID edge_based_node_id,
+                             std::size_t period) const override final
+    {
+        auto base = query_graph.GetNodeWeight(edge_based_node_id);
+        if (period < mld_weight_deltas.size())
+        {
+            auto it = mld_weight_deltas[period].find(
+                static_cast<std::uint32_t>(edge_based_node_id));
+            if (it != mld_weight_deltas[period].end())
+                return base + it->second.first;
+        }
+        return base;
+    }
+
     EdgeDuration GetNodeDuration(const NodeID edge_based_node_id) const override final
     {
         return query_graph.GetNodeDuration(edge_based_node_id);
+    }
+
+    EdgeDuration GetNodeDuration(const NodeID edge_based_node_id,
+                                 std::size_t period) const override final
+    {
+        auto base = query_graph.GetNodeDuration(edge_based_node_id);
+        if (period < mld_weight_deltas.size())
+        {
+            auto it = mld_weight_deltas[period].find(
+                static_cast<std::uint32_t>(edge_based_node_id));
+            if (it != mld_weight_deltas[period].end())
+                return base + it->second.second;
+        }
+        return base;
     }
 
     EdgeDistance GetNodeDistance(const NodeID edge_based_node_id) const override final

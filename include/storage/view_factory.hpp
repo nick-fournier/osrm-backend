@@ -36,6 +36,8 @@
 #include "util/vector_view.hpp"
 
 #include "util/filtered_graph.hpp"
+
+#include <unordered_map>
 namespace osrm::storage
 {
 
@@ -373,6 +375,71 @@ inline std::size_t detect_num_periods(const SharedDataIndex &index, const std::s
     }
 
     return found_any ? max_period + 1 : 0;
+}
+
+// Load per-period weight deltas from .mldgr TAR.
+// Returns vector indexed by period. Period 0 is empty (base graph = period 0).
+// Each non-base period is a map: node_id -> (weight_delta, duration_delta).
+inline auto load_weight_deltas(const SharedDataIndex &index)
+    -> std::vector<std::unordered_map<std::uint32_t, std::pair<EdgeWeight, EdgeDuration>>>
+{
+    // Check if weight deltas exist
+    std::vector<std::string> delta_prefixes;
+    index.List("/mld/weight_deltas/period/", std::back_inserter(delta_prefixes));
+    if (delta_prefixes.empty())
+        return {};
+
+    // Read period count
+    std::uint64_t num_periods = 0;
+    try
+    {
+        auto ptr = index.GetBlockPtr<std::uint64_t>("/mld/weight_deltas/period_count");
+        num_periods = *ptr;
+    }
+    catch (...)
+    {
+        return {};
+    }
+
+    if (num_periods <= 1)
+        return {};
+
+    // Packed delta struct matching what was written
+    struct WeightDelta
+    {
+        std::uint32_t node_id;
+        EdgeWeight weight_delta;
+        EdgeDuration duration_delta;
+    };
+
+    std::vector<std::unordered_map<std::uint32_t, std::pair<EdgeWeight, EdgeDuration>>> result(
+        num_periods);
+
+    // Period 0 has no deltas (it IS the base)
+    for (std::size_t p = 1; p < num_periods; ++p)
+    {
+        auto prefix = "/mld/weight_deltas/period/" + std::to_string(p);
+
+        // Check if this period exists in the index
+        std::vector<std::string> sub_entries;
+        index.List(prefix + "/", std::back_inserter(sub_entries));
+        if (sub_entries.empty())
+            continue;
+
+        auto count = index.GetBlockEntries(prefix + "/data");
+        if (count == 0)
+            continue;
+
+        auto *data = index.GetBlockPtr<WeightDelta>(prefix + "/data");
+        auto &period_map = result[p];
+        period_map.reserve(count);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            period_map[data[i].node_id] = {data[i].weight_delta, data[i].duration_delta};
+        }
+    }
+
+    return result;
 }
 
 inline auto make_multi_level_graph_view(const SharedDataIndex &index, const std::string &name)

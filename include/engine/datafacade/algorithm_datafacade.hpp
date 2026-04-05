@@ -78,9 +78,18 @@ template <> class AlgorithmDataFacade<MLD>
     virtual EdgeRange GetAdjacentEdgeRange(const NodeID edge_based_node_id) const = 0;
 
     virtual EdgeWeight GetNodeWeight(const NodeID edge_based_node_id) const = 0;
+    // Period-aware node weight: applies per-period deltas. Default falls back to base.
+    virtual EdgeWeight GetNodeWeight(const NodeID edge_based_node_id, std::size_t /*period*/) const
+    {
+        return GetNodeWeight(edge_based_node_id);
+    }
 
     virtual EdgeDuration
     GetNodeDuration(const NodeID edge_based_node_id) const = 0; // TODO: to be removed
+    virtual EdgeDuration GetNodeDuration(const NodeID edge_based_node_id, std::size_t /*period*/) const
+    {
+        return GetNodeDuration(edge_based_node_id);
+    }
 
     virtual EdgeDistance GetNodeDistance(const NodeID edge_based_node_id) const = 0;
 
