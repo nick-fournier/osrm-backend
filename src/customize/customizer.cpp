@@ -115,31 +115,21 @@ std::vector<CellMetric> customizeFilteredMetrics(const partitioner::MultiLevelEd
 }
 } // namespace
 
-int Customizer::Run(const CustomizationConfig &config)
+int Customizer::Run(const CustomizationConfig &config,
+                    const std::vector<std::pair<std::size_t, std::string>> &period_speed_files)
 {
     tbb::global_control gc(tbb::global_control::max_allowed_parallelism,
                            config.requested_num_threads);
+
+    const bool multi_period = !period_speed_files.empty();
 
     TIMER_START(loading_data);
 
     partitioner::MultiLevelPartition mlp;
     partitioner::files::readPartition(config.GetPath(".osrm.partition"), mlp);
 
-    std::vector<EdgeWeight> node_weights;
-    std::vector<EdgeDuration> node_durations; // TODO: remove when durations are optional
-    std::vector<EdgeDistance> node_distances; // TODO: remove when distances are optional
-    std::uint32_t connectivity_checksum = 0;
-    auto graph = LoadAndUpdateEdgeExpandedGraph(
-        config, mlp, node_weights, node_durations, node_distances, connectivity_checksum);
-    BOOST_ASSERT(graph.GetNumberOfNodes() == node_weights.size());
-    std::for_each(
-        node_weights.begin(), node_weights.end(), [](auto &w) { w &= EdgeWeight{0x7fffffff}; });
-    util::Log() << "Loaded edge based graph: " << graph.GetNumberOfEdges() << " edges, "
-                << graph.GetNumberOfNodes() << " nodes";
-
     partitioner::CellStorage storage;
     partitioner::files::readCells(config.GetPath(".osrm.cells"), storage);
-    TIMER_STOP(loading_data);
 
     extractor::EdgeBasedNodeDataContainer node_data;
     extractor::files::readNodeData(config.GetPath(".osrm.ebg_nodes"), node_data);
@@ -147,33 +137,106 @@ int Customizer::Run(const CustomizationConfig &config)
     extractor::ProfileProperties properties;
     extractor::files::readProfileProperties(config.GetPath(".osrm.properties"), properties);
 
+    TIMER_STOP(loading_data);
     util::Log() << "Loading partition data took " << TIMER_SEC(loading_data) << " seconds";
 
-    TIMER_START(cell_customize);
-    auto filter = util::excludeFlagsToNodeFilter(graph.GetNumberOfNodes(), node_data, properties);
-    auto metrics = customizeFilteredMetrics(graph, storage, CellCustomizer{mlp}, filter);
-    TIMER_STOP(cell_customize);
-    util::Log() << "Cells customization took " << TIMER_SEC(cell_customize) << " seconds";
-
-    partitioner::printCellStatistics(mlp, storage);
-    for (const auto &metric : metrics)
+    // Build the list of (period_index, speed_csv_path) to iterate.
+    // Legacy single-period: synthesize one entry from config's speed paths.
+    std::vector<std::pair<std::size_t, std::string>> periods;
+    if (multi_period)
     {
-        printUnreachableStatistics(mlp, storage, metric);
+        periods = period_speed_files;
+        util::Log() << "Multi-period customize: " << periods.size() << " periods";
+    }
+    else
+    {
+        // Legacy: use first speed lookup path from config, period 0
+        std::string speed_path;
+        if (!config.updater_config.segment_speed_lookup_paths.empty())
+            speed_path = config.updater_config.segment_speed_lookup_paths.front();
+        periods.emplace_back(0, speed_path);
     }
 
+    // Customize each period, accumulate metrics
+    std::vector<std::pair<std::size_t, std::vector<CellMetric>>> all_period_metrics;
+    all_period_metrics.reserve(periods.size());
+
+    std::uint32_t connectivity_checksum = 0;
+    std::vector<EdgeWeight> last_node_weights;
+    std::vector<EdgeDuration> last_node_durations;
+    std::vector<EdgeDistance> last_node_distances;
+    partitioner::MultiLevelEdgeBasedGraph last_graph;
+
+    for (const auto &[period_index, speed_csv_path] : periods)
+    {
+        TIMER_START(period_customize);
+
+        auto period_config = config;
+        if (!speed_csv_path.empty())
+            period_config.updater_config.segment_speed_lookup_paths = {speed_csv_path};
+
+        std::vector<EdgeWeight> node_weights;
+        std::vector<EdgeDuration> node_durations;
+        std::vector<EdgeDistance> node_distances;
+        auto graph = LoadAndUpdateEdgeExpandedGraph(
+            period_config, mlp, node_weights, node_durations, node_distances, connectivity_checksum);
+        BOOST_ASSERT(graph.GetNumberOfNodes() == node_weights.size());
+        std::for_each(node_weights.begin(),
+                      node_weights.end(),
+                      [](auto &w) { w &= EdgeWeight{0x7fffffff}; });
+
+        if (all_period_metrics.empty())
+        {
+            util::Log() << "Loaded edge based graph: " << graph.GetNumberOfEdges() << " edges, "
+                        << graph.GetNumberOfNodes() << " nodes";
+            partitioner::printCellStatistics(mlp, storage);
+        }
+
+        auto filter =
+            util::excludeFlagsToNodeFilter(graph.GetNumberOfNodes(), node_data, properties);
+        auto metrics = customizeFilteredMetrics(graph, storage, CellCustomizer{mlp}, filter);
+
+        TIMER_STOP(period_customize);
+        util::Log() << "Period " << period_index << " customization took "
+                    << TIMER_SEC(period_customize) << " seconds";
+
+        for (const auto &metric : metrics)
+        {
+            printUnreachableStatistics(mlp, storage, metric);
+        }
+
+        all_period_metrics.emplace_back(period_index, std::move(metrics));
+
+        last_node_weights = std::move(node_weights);
+        last_node_durations = std::move(node_durations);
+        last_node_distances = std::move(node_distances);
+        last_graph = std::move(graph);
+    }
+
+    // Write cell metrics
     TIMER_START(writing_mld_data);
-    std::unordered_map<std::string, std::vector<CellMetric>> metric_exclude_classes = {
-        {properties.GetWeightName(), std::move(metrics)},
-    };
-    files::writeCellMetrics(config.GetPath(".osrm.cell_metrics"), metric_exclude_classes);
+    if (multi_period)
+    {
+        files::writeMultiPeriodCellMetrics(
+            config.GetPath(".osrm.cell_metrics"), properties.GetWeightName(), all_period_metrics);
+    }
+    else
+    {
+        // Legacy format for backward compat with non-period-aware OSRM
+        std::unordered_map<std::string, std::vector<CellMetric>> metric_exclude_classes = {
+            {properties.GetWeightName(), std::move(all_period_metrics[0].second)},
+        };
+        files::writeCellMetrics(config.GetPath(".osrm.cell_metrics"), metric_exclude_classes);
+    }
     TIMER_STOP(writing_mld_data);
     util::Log() << "MLD customization writing took " << TIMER_SEC(writing_mld_data) << " seconds";
 
+    // Write graph (topology is same across periods, edge weights from last)
     TIMER_START(writing_graph);
-    MultiLevelEdgeBasedGraph shaved_graph{std::move(graph),
-                                          std::move(node_weights),
-                                          std::move(node_durations),
-                                          std::move(node_distances)};
+    MultiLevelEdgeBasedGraph shaved_graph{std::move(last_graph),
+                                          std::move(last_node_weights),
+                                          std::move(last_node_durations),
+                                          std::move(last_node_distances)};
     customizer::files::writeGraph(
         config.GetPath(".osrm.mldgr"), shaved_graph, connectivity_checksum);
     TIMER_STOP(writing_graph);

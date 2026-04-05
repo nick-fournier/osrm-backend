@@ -650,6 +650,8 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
     partitioner::MultiLevelPartitionView mld_partition;
     partitioner::CellStorageView mld_cell_storage;
     customizer::CellMetricView mld_cell_metric;
+    // Multi-period: indexed by period. Empty vector means single-period mode.
+    std::vector<customizer::CellMetricView> mld_period_metrics;
     using QueryGraph = customizer::MultiLevelEdgeBasedGraphView;
     using GraphNode = QueryGraph::NodeArrayEntry;
     using GraphEdge = QueryGraph::EdgeArrayEntry;
@@ -665,6 +667,15 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
             make_filtered_cell_metric_view(index, "/mld/metrics/" + metric_name, exclude_index);
         mld_cell_storage = make_cell_storage_view(index, "/mld/cellstorage");
         query_graph = make_multi_level_graph_view(index, "/mld/multilevelgraph");
+
+        // Detect and load multi-period metrics if present
+        auto num_periods =
+            detect_num_periods(index, "/mld/metrics/" + metric_name);
+        if (num_periods > 0)
+        {
+            mld_period_metrics = make_period_cell_metric_views(
+                index, "/mld/metrics/" + metric_name, exclude_index, num_periods);
+        }
     }
 
     // allocator that keeps the allocation data
@@ -688,6 +699,25 @@ template <> class ContiguousInternalMemoryAlgorithmDataFacade<MLD> : public Algo
     const partitioner::CellStorageView &GetCellStorage() const override { return mld_cell_storage; }
 
     const customizer::CellMetricView &GetCellMetric() const override { return mld_cell_metric; }
+
+    // Multi-period metric access: returns metric for given period.
+    // Falls back to base (period 0) if period has no stored metrics (sparse).
+    const customizer::CellMetricView &GetCellMetric(std::size_t period) const
+    {
+        if (period < mld_period_metrics.size() && mld_period_metrics[period].weights.size() > 0)
+        {
+            return mld_period_metrics[period];
+        }
+        // Fall back to period 0 if available, otherwise legacy single metric
+        if (!mld_period_metrics.empty() && mld_period_metrics[0].weights.size() > 0)
+        {
+            return mld_period_metrics[0];
+        }
+        return mld_cell_metric;
+    }
+
+    bool HasMultiplePeriods() const { return mld_period_metrics.size() > 1; }
+    std::size_t GetNumPeriods() const { return mld_period_metrics.size(); }
 
     // search graph access
     unsigned GetNumberOfNodes() const override final { return query_graph.GetNumberOfNodes(); }

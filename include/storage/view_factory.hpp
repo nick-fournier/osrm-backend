@@ -315,6 +315,62 @@ inline auto make_cell_metric_view(const SharedDataIndex &index, const std::strin
     return cell_metric_excludes;
 }
 
+// Multi-period: load all period metrics for a given exclude index
+// Returns vector indexed by period. Empty entries mean "use period 0 (base)".
+inline auto make_period_cell_metric_views(const SharedDataIndex &index,
+                                          const std::string &name,
+                                          const std::size_t exclude_index,
+                                          const std::size_t num_periods)
+{
+    std::vector<customizer::CellMetricView> period_metrics(num_periods);
+
+    for (std::size_t p = 0; p < num_periods; ++p)
+    {
+        auto prefix =
+            name + "/period/" + std::to_string(p) + "/exclude/" + std::to_string(exclude_index);
+
+        // Check if this period's data exists by listing its sub-entries
+        std::vector<std::string> sub_entries;
+        index.List(prefix + "/", std::back_inserter(sub_entries));
+        if (sub_entries.empty())
+            continue; // sparse: no metrics for this period
+
+        auto weights_block_id = prefix + "/weights";
+        auto durations_block_id = prefix + "/durations";
+        auto distances_block_id = prefix + "/distances";
+
+        period_metrics[p] = customizer::CellMetricView{
+            make_vector_view<EdgeWeight>(index, weights_block_id),
+            make_vector_view<EdgeDuration>(index, durations_block_id),
+            make_vector_view<EdgeDistance>(index, distances_block_id)};
+    }
+
+    return period_metrics;
+}
+
+// Detect number of periods from TAR data blocks
+inline std::size_t detect_num_periods(const SharedDataIndex &index, const std::string &name)
+{
+    std::vector<std::string> period_prefixes;
+    index.List(name + "/period/", std::back_inserter(period_prefixes));
+
+    std::size_t max_period = 0;
+    bool found_any = false;
+    for (const auto &prefix : period_prefixes)
+    {
+        // prefix looks like "0/exclude/..." — extract leading number
+        auto slash_pos = prefix.find('/');
+        if (slash_pos != std::string::npos)
+        {
+            std::size_t period = std::stoull(prefix.substr(0, slash_pos));
+            max_period = std::max(max_period, period);
+            found_any = true;
+        }
+    }
+
+    return found_any ? max_period + 1 : 0;
+}
+
 inline auto make_multi_level_graph_view(const SharedDataIndex &index, const std::string &name)
 {
     auto node_list = make_vector_view<customizer::MultiLevelEdgeBasedGraphView::NodeArrayEntry>(

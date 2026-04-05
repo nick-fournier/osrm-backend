@@ -28,6 +28,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef OSRM_CUSTOMIZER_HPP
 #define OSRM_CUSTOMIZER_HPP
 
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace osrm
 {
 
@@ -40,10 +44,13 @@ struct CustomizationConfig;
  * Runs customize pipeline stage.
  *
  * \param config The user-provided customization configuration.
+ * \param period_speed_files Optional list of (period_index, speed_csv_path) pairs.
+ *        If non-empty, writes multi-period metrics. If empty, single-period legacy mode.
  * \throws TODO
  * \see Customizer, CustomizationConfig
  */
-void customize(const customizer::CustomizationConfig &config);
+void customize(const customizer::CustomizationConfig &config,
+               const std::vector<std::pair<std::size_t, std::string>> &period_speed_files = {});
 
 } // namespace osrm
 

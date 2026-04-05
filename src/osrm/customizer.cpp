@@ -7,6 +7,10 @@ namespace osrm
 
 // Pimpl-like facade
 
-void customize(const CustomizationConfig &config) { customizer::Customizer().Run(config); }
+void customize(const CustomizationConfig &config,
+               const std::vector<std::pair<std::size_t, std::string>> &period_speed_files)
+{
+    customizer::Customizer().Run(config, period_speed_files);
+}
 
 } // namespace osrm

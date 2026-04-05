@@ -100,6 +100,12 @@ class FileReader
         return size;
     }
 
+    bool HasEntry(const std::string &name)
+    {
+        mtar_header_t header;
+        return mtar_find(&handle, name.c_str(), &header) != MTAR_ENOTFOUND;
+    }
+
     template <typename T> void ReadInto(const std::string &name, T &tmp)
     {
         ReadInto(name, &tmp, 1);
