@@ -358,11 +358,15 @@ inline std::size_t detect_num_periods(const SharedDataIndex &index, const std::s
     bool found_any = false;
     for (const auto &prefix : period_prefixes)
     {
-        // prefix looks like "0/exclude/..." — extract leading number
-        auto slash_pos = prefix.find('/');
-        if (slash_pos != std::string::npos)
+        // List() returns full paths like "/mld/metrics/routability/period/0"
+        // Extract the trailing number after the last '/'
+        auto last_slash = prefix.rfind('/');
+        auto num_str = (last_slash != std::string::npos)
+                           ? prefix.substr(last_slash + 1)
+                           : prefix;
+        if (!num_str.empty())
         {
-            std::size_t period = std::stoull(prefix.substr(0, slash_pos));
+            std::size_t period = std::stoull(num_str);
             max_period = std::max(max_period, period);
             found_any = true;
         }
