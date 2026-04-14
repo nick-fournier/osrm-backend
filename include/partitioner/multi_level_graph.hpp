@@ -11,6 +11,8 @@
 #include "util/vector_view.hpp"
 
 #include <tbb/parallel_sort.h>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
 
 #include <boost/iterator/permutation_iterator.hpp>
 #include <boost/range/combine.hpp>
@@ -159,11 +161,15 @@ class MultiLevelGraph : public util::StaticGraph<EdgeDataT, Ownership>
     auto GetHighestBorderLevel(const MultiLevelPartition &mlp, const ContainerT &edges) const
     {
         std::vector<LevelID> highest_border_level(edges.size());
-        std::transform(edges.begin(),
-                       edges.end(),
-                       highest_border_level.begin(),
-                       [&mlp](const auto &edge)
-                       { return mlp.GetHighestDifferentLevel(edge.source, edge.target); });
+        tbb::parallel_for(tbb::blocked_range<std::size_t>(0, edges.size()),
+                          [&](const auto &range)
+                          {
+                              for (auto i = range.begin(); i < range.end(); ++i)
+                              {
+                                  highest_border_level[i] =
+                                      mlp.GetHighestDifferentLevel(edges[i].source, edges[i].target);
+                              }
+                          });
         return highest_border_level;
     }
 

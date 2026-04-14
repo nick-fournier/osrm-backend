@@ -13,6 +13,7 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
+#include <tbb/parallel_sort.h>
 
 #include <cstdint>
 
@@ -63,13 +64,13 @@ std::vector<OutputEdgeT> prepareEdgesForUsageInGraph(std::vector<extractor::Edge
     // sort into blocks of edges with same source + target
     // the we partition by the forward flag to sort all edges with a forward direction first.
     // the we sort by weight to ensure the first forward edge is the smallest forward edge
-    std::sort(begin(edges),
-              end(edges),
-              [](const auto &lhs, const auto &rhs)
-              {
-                  return std::tie(lhs.source, lhs.target, rhs.data.forward, lhs.data.weight) <
-                         std::tie(rhs.source, rhs.target, lhs.data.forward, rhs.data.weight);
-              });
+    tbb::parallel_sort(begin(edges),
+                       end(edges),
+                       [](const auto &lhs, const auto &rhs)
+                       {
+                           return std::tie(lhs.source, lhs.target, rhs.data.forward, lhs.data.weight) <
+                                  std::tie(rhs.source, rhs.target, lhs.data.forward, rhs.data.weight);
+                       });
 
     std::vector<OutputEdgeT> output_edges;
     output_edges.reserve(edges.size());
