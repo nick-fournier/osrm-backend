@@ -8,7 +8,7 @@
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 
-#include <unordered_set>
+#include <algorithm>
 
 namespace osrm::customizer
 {
@@ -50,19 +50,25 @@ class CellCustomizer
                 continue;
             }
 
-            std::unordered_set<NodeID> destinations_set;
+            // Build sorted destination list for fast early-termination check.
+            // Avoids per-source std::unordered_set heap allocation.
+            thread_local std::vector<NodeID> sorted_dests;
+            sorted_dests.clear();
             for (const auto destination : destinations)
             {
                 if (allowed_nodes[destination])
                 {
-                    destinations_set.insert(destination);
+                    sorted_dests.push_back(destination);
                 }
             }
+            std::sort(sorted_dests.begin(), sorted_dests.end());
+            std::size_t remaining_destinations = sorted_dests.size();
+
             heap.Clear();
             heap.Insert(source, {0}, {false, {0}, {0}});
 
             // explore search space
-            while (!heap.Empty() && !destinations_set.empty())
+            while (!heap.Empty() && remaining_destinations > 0)
             {
                 const NodeID node = heap.DeleteMin();
                 const EdgeWeight weight = heap.GetKey(node);
@@ -80,7 +86,10 @@ class CellCustomizer
                           duration,
                           distance);
 
-                destinations_set.erase(node);
+                if (std::binary_search(sorted_dests.begin(), sorted_dests.end(), node))
+                {
+                    --remaining_destinations;
+                }
             }
 
             // fill a map of destination nodes to placeholder pointers
