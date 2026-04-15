@@ -36,4 +36,6 @@ SharedMemoryAllocator::~SharedMemoryAllocator() {}
 
 const storage::SharedDataIndex &SharedMemoryAllocator::GetIndex() { return index; }
 
+storage::SharedDataIndex &SharedMemoryAllocator::GetMutableIndex() { return index; }
+
 } // namespace osrm::engine::datafacade

@@ -137,6 +137,13 @@ class OSRM final
     Status Tile(const TileParameters &parameters, std::string &result) const;
     Status Tile(const TileParameters &parameters, engine::api::ResultT &result) const;
 
+    /// Copy cell metric data in-place into the engine's memory buffer.
+    /// \param name  TAR block path, e.g. "/mld/metrics/routability/exclude/0/weights"
+    /// \param data  Source buffer (must be exactly the right size)
+    /// \param size  Size of the source buffer in bytes
+    /// \return true if the copy succeeded, false if the block was not found or size mismatch
+    bool UpdateMetricBlock(const std::string &name, const void *data, std::size_t size);
+
   private:
     std::unique_ptr<engine::EngineInterface> engine_;
 };

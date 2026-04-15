@@ -61,4 +61,6 @@ MMapMemoryAllocator::~MMapMemoryAllocator() {}
 
 const storage::SharedDataIndex &MMapMemoryAllocator::GetIndex() { return index; }
 
+storage::SharedDataIndex &MMapMemoryAllocator::GetMutableIndex() { return index; }
+
 } // namespace osrm::engine::datafacade

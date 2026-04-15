@@ -12,6 +12,8 @@
 
 #include <boost/algorithm/string/join.hpp>
 
+#include <cstring>
+
 namespace osrm
 {
 
@@ -129,6 +131,15 @@ Status OSRM::Tile(const engine::api::TileParameters &params, std::string &str_re
 Status OSRM::Tile(const engine::api::TileParameters &params, engine::api::ResultT &result) const
 {
     return engine_->Tile(params, result);
+}
+
+bool OSRM::UpdateMetricBlock(const std::string &name, const void *data, std::size_t size)
+{
+    auto block = engine_->GetMutableMetricBlock(name);
+    if (!block.ptr || block.size_bytes != size)
+        return false;
+    std::memcpy(block.ptr, data, size);
+    return true;
 }
 
 } // namespace osrm

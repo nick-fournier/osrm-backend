@@ -25,6 +25,7 @@ class MMapMemoryAllocator final : public ContiguousBlockAllocator
 
     // interface to give access to the datafacades
     const storage::SharedDataIndex &GetIndex() override final;
+    storage::SharedDataIndex &GetMutableIndex() override final;
 
   private:
     storage::SharedDataIndex index;

@@ -22,6 +22,10 @@ template <typename AlgorithmT, template <typename A> class FacadeT> class DataFa
 
     virtual std::shared_ptr<const Facade> Get(const api::BaseParameters &) const = 0;
     virtual std::shared_ptr<const Facade> Get(const api::TileParameters &) const = 0;
+
+    /// Access to the underlying allocator for in-place metric updates.
+    /// Returns nullptr for providers that don't support mutable access.
+    virtual std::shared_ptr<datafacade::ContiguousBlockAllocator> GetAllocator() { return nullptr; }
 };
 
 template <typename AlgorithmT, template <typename A> class FacadeT>
@@ -55,7 +59,8 @@ class ImmutableProvider final : public DataFacadeProvider<AlgorithmT, FacadeT>
     using Facade = typename DataFacadeProvider<AlgorithmT, FacadeT>::Facade;
 
     ImmutableProvider(const storage::StorageConfig &config)
-        : facade_factory(std::make_shared<datafacade::ProcessMemoryAllocator>(config))
+        : allocator_(std::make_shared<datafacade::ProcessMemoryAllocator>(config)),
+          facade_factory(allocator_)
     {
     }
 
@@ -68,7 +73,13 @@ class ImmutableProvider final : public DataFacadeProvider<AlgorithmT, FacadeT>
         return facade_factory.Get(params);
     }
 
+    std::shared_ptr<datafacade::ContiguousBlockAllocator> GetAllocator() override
+    {
+        return allocator_;
+    }
+
   private:
+    std::shared_ptr<datafacade::ProcessMemoryAllocator> allocator_;
     DataFacadeFactory<FacadeT, AlgorithmT> facade_factory;
 };
 

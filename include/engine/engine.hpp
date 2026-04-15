@@ -36,6 +36,12 @@ class EngineInterface
     virtual Status Trip(const api::TripParameters &parameters, api::ResultT &result) const = 0;
     virtual Status Match(const api::MatchParameters &parameters, api::ResultT &result) const = 0;
     virtual Status Tile(const api::TileParameters &parameters, api::ResultT &result) const = 0;
+
+    /// Returns a mutable pointer to the cell metric data block identified by
+    /// the given TAR path name (e.g. "/mld/metrics/routability/exclude/0/weights").
+    /// Returns {nullptr, 0} if the block does not exist.
+    struct MemoryBlock { void *ptr; std::size_t size_bytes; };
+    virtual MemoryBlock GetMutableMetricBlock(const std::string & /*name*/) { return {nullptr, 0}; }
 };
 
 template <typename Algorithm> class Engine final : public EngineInterface
@@ -114,6 +120,17 @@ template <typename Algorithm> class Engine final : public EngineInterface
     Status Tile(const api::TileParameters &params, api::ResultT &result) const override final
     {
         return tile_plugin.HandleRequest(GetAlgorithms(params), params, result);
+    }
+
+    MemoryBlock GetMutableMetricBlock(const std::string &name) override
+    {
+        auto alloc = facade_provider->GetAllocator();
+        if (!alloc) return {nullptr, 0};
+        auto &idx = alloc->GetMutableIndex();
+        auto size = idx.GetBlockSize(name);
+        if (size == 0) return {nullptr, 0};
+        void *ptr = idx.template GetBlockPtr<char>(name);
+        return {ptr, size};
     }
 
   private:

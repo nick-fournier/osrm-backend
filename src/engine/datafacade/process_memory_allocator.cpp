@@ -32,4 +32,6 @@ ProcessMemoryAllocator::~ProcessMemoryAllocator() {}
 
 const storage::SharedDataIndex &ProcessMemoryAllocator::GetIndex() { return index; }
 
+storage::SharedDataIndex &ProcessMemoryAllocator::GetMutableIndex() { return index; }
+
 } // namespace osrm::engine::datafacade

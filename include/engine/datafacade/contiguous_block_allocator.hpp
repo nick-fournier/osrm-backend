@@ -13,6 +13,10 @@ class ContiguousBlockAllocator
 
     // interface to give access to the datafacades
     virtual const storage::SharedDataIndex &GetIndex() = 0;
+
+    // Mutable access for in-place metric updates (congestion loop).
+    // Default returns the same reference; override if needed.
+    virtual storage::SharedDataIndex &GetMutableIndex() = 0;
 };
 
 } // namespace osrm::engine::datafacade
