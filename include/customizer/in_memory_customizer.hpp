@@ -42,7 +42,13 @@ class InMemoryCustomizer
     /// and writes the updated .osrm.cell_metrics file.
     ///
     /// Returns the wall-clock time (seconds) spent in cell Dijkstra.
-    double Recustomize(const std::string &speed_csv_path);
+    ///
+    /// @param filter_indices  If non-empty, only re-run cell Dijkstra for
+    ///   these filter indices (e.g. {0} = default filter only).  Filters
+    ///   not listed retain their previous metrics from the last full run.
+    ///   Empty (default) = all filters, identical to previous behavior.
+    double Recustomize(const std::string &speed_csv_path,
+                       const std::vector<std::size_t> &filter_indices = {});
 
     /// Access the metrics produced by the last Recustomize() call.
     /// One CellMetric per exclude filter (typically 4).

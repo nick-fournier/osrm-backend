@@ -86,8 +86,8 @@ void InMemoryCustomizer::Initialize(const CustomizationConfig &config)
         typename partitioner::MultiLevelEdgeBasedGraph::InputEdge>(std::move(directed));
     graph_ = partitioner::MultiLevelEdgeBasedGraph(mlp_, num_nodes_, tidied);
 
-    // Run initial cell customization
-    auto metrics = customizeAllFilters(graph_, storage_, CellCustomizer{mlp_}, node_filters_);
+    // Run initial cell customization (all filters — cold start)
+    latest_metrics_ = customizeAllFilters(graph_, storage_, CellCustomizer{mlp_}, node_filters_);
 
     TIMER_STOP(init);
     util::Log() << "InMemoryCustomizer initialized in " << TIMER_SEC(init) << "s"
@@ -97,7 +97,8 @@ void InMemoryCustomizer::Initialize(const CustomizationConfig &config)
     initialized_ = true;
 }
 
-double InMemoryCustomizer::Recustomize(const std::string &speed_csv_path)
+double InMemoryCustomizer::Recustomize(const std::string &speed_csv_path,
+                                       const std::vector<std::size_t> &filter_indices)
 {
     BOOST_ASSERT_MSG(initialized_, "Must call Initialize() before Recustomize()");
 
@@ -132,14 +133,30 @@ double InMemoryCustomizer::Recustomize(const std::string &speed_csv_path)
         typename partitioner::MultiLevelEdgeBasedGraph::InputEdge>(std::move(directed));
     graph_ = partitioner::MultiLevelEdgeBasedGraph(mlp_, num_nodes_, tidied);
 
-    // Run cell Dijkstra (the expensive part)
+    // Run cell Dijkstra — either all filters or a selected subset
     TIMER_START(cell_customize);
-    auto metrics = customizeAllFilters(graph_, storage_, CellCustomizer{mlp_}, node_filters_);
+    if (filter_indices.empty())
+    {
+        // All filters (default — identical to previous behavior)
+        latest_metrics_ = customizeAllFilters(
+            graph_, storage_, CellCustomizer{mlp_}, node_filters_);
+    }
+    else
+    {
+        // Selective: only re-run listed filters, keep previous metrics for others
+        CellCustomizer customizer{mlp_};
+        for (auto idx : filter_indices)
+        {
+            if (idx < node_filters_.size() && idx < latest_metrics_.size())
+            {
+                auto metric = storage_.MakeMetric();
+                customizer.Customize(graph_, storage_, node_filters_[idx], metric);
+                latest_metrics_[idx] = std::move(metric);
+            }
+        }
+    }
     TIMER_STOP(cell_customize);
     double cell_time = TIMER_SEC(cell_customize);
-
-    // Store latest metrics for callers to retrieve
-    latest_metrics_ = std::move(metrics);
 
     return cell_time;
 }
