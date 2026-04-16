@@ -5,6 +5,8 @@
 #include "customizer/cell_metric.hpp"
 #include "customizer/customizer_config.hpp"
 
+#include "extractor/edge_based_edge.hpp"
+
 #include "partitioner/cell_storage.hpp"
 #include "partitioner/multi_level_graph.hpp"
 #include "partitioner/multi_level_partition.hpp"
@@ -19,14 +21,14 @@ namespace osrm::customizer
 {
 
 /// Keeps the MLD graph and partition in memory between customize calls,
-/// avoiding repeated disk I/O and graph construction.  Only the updater
-/// (CSV → edge weights) and cell Dijkstra are re-run on each call.
+/// avoiding repeated disk I/O and graph construction.  The graph topology
+/// is built once; subsequent calls patch edge weights in-place and re-run
+/// cell Dijkstra only.
 ///
 /// Usage:
 ///   InMemoryCustomizer imc;
 ///   imc.Initialize(config);           // one-time: loads graph, partition
-///   double t = imc.Recustomize(csv);  // fast: updater + cell Dijkstra + write metrics
-///   // then reload OSRM engine to pick up new .osrm.cell_metrics
+///   double t = imc.Recustomize(csv);  // fast: updater + weight patch + cell Dijkstra
 class InMemoryCustomizer
 {
   public:
@@ -34,12 +36,12 @@ class InMemoryCustomizer
 
     /// One-time initialization.  Loads partition, cell storage, node data,
     /// and runs a full first customize (updater + graph build + cell Dijkstra).
-    /// After this call the graph and partition are cached in memory.
+    /// Builds an edge mapping for in-place weight updates on subsequent calls.
     void Initialize(const CustomizationConfig &config);
 
     /// Re-customize using a new speed CSV.  Runs the updater to get new
-    /// edge weights, patches the cached graph, re-runs cell Dijkstra,
-    /// and writes the updated .osrm.cell_metrics file.
+    /// edge weights, patches them in-place on the cached graph (skipping
+    /// the full graph rebuild), then re-runs cell Dijkstra.
     ///
     /// Returns the wall-clock time (seconds) spent in cell Dijkstra.
     ///
@@ -66,9 +68,16 @@ class InMemoryCustomizer
     std::vector<std::vector<bool>> node_filters_;
     std::uint32_t connectivity_checksum_ = 0;
 
-    // Cached graph (topology fixed, weights updated per Recustomize)
+    // Cached graph (topology fixed, weights patched in-place per Recustomize)
     partitioner::MultiLevelEdgeBasedGraph graph_;
     EdgeID num_nodes_ = 0;
+
+    // Edge mapping for in-place updates: original_edge[i] → graph edge ID
+    // Built during Initialize, used by Recustomize to skip graph rebuild.
+    // fwd = source→target direction, rev = target→source direction.
+    // SPECIAL_EDGEID if that direction was pruned (INVALID_EDGE_WEIGHT).
+    std::vector<EdgeID> edge_to_graph_fwd_;
+    std::vector<EdgeID> edge_to_graph_rev_;
 
     // Latest metrics from Recustomize() — one per exclude filter
     std::vector<CellMetric> latest_metrics_;

@@ -16,7 +16,10 @@
 #include "util/log.hpp"
 #include "util/timing_util.hpp"
 
+#include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_sort.h>
 
 namespace osrm::customizer
 {
@@ -39,6 +42,52 @@ customizeAllFilters(const partitioner::MultiLevelEdgeBasedGraph &graph,
         metrics.push_back(std::move(metric));
     }
     return metrics;
+}
+
+/// Like prepareEdgesForUsageInGraph but never merges forward/backward edges.
+/// This keeps a stable edge count so weights can be patched in-place.
+template <typename OutputEdgeT>
+std::vector<OutputEdgeT> prepareEdgesNoMerge(std::vector<extractor::EdgeBasedEdge> edges)
+{
+    // Same sort: (source, target, forward-first, weight)
+    tbb::parallel_sort(begin(edges), end(edges),
+        [](const auto &lhs, const auto &rhs)
+        {
+            return std::tie(lhs.source, lhs.target, rhs.data.forward, lhs.data.weight) <
+                   std::tie(rhs.source, rhs.target, lhs.data.forward, rhs.data.weight);
+        });
+
+    std::vector<OutputEdgeT> output;
+    output.reserve(edges.size());
+
+    for (auto it = edges.begin(); it != edges.end();)
+    {
+        const NodeID source = it->source;
+        const NodeID target = it->target;
+
+        auto end_interval = std::find_if_not(it, edges.end(),
+            [source, target](const auto &e)
+            { return std::tie(e.source, e.target) == std::tie(source, target); });
+
+        // Remove self-loops
+        if (source == target) { it = end_interval; continue; }
+
+        // Find boundary between forward and backward edges
+        auto first_bwd = std::find_if(it, end_interval,
+            [](const auto &e) { return !e.data.forward && e.data.backward; });
+
+        // Keep first (smallest-weight) forward edge
+        if (it != first_bwd)
+            output.push_back(OutputEdgeT{source, target, it->data});
+
+        // Keep first (smallest-weight) backward edge — always separate
+        if (first_bwd != end_interval)
+            output.push_back(OutputEdgeT{source, target, first_bwd->data});
+
+        it = end_interval;
+    }
+
+    return output;
 }
 } // namespace
 
@@ -70,9 +119,6 @@ void InMemoryCustomizer::Initialize(const CustomizationConfig &config)
     num_nodes_ = updater.LoadAndUpdateEdgeExpandedGraph(
         edge_based_edge_list, node_weights, node_durations, connectivity_checksum_);
 
-    std::vector<EdgeDistance> node_distances;
-    extractor::files::readEdgeBasedNodeDistances(config.GetPath(".osrm.enw"), node_distances);
-
     // Mask high bit (used as flag by OSRM)
     for (auto &w : node_weights)
         w &= EdgeWeight{0x7fffffff};
@@ -80,11 +126,46 @@ void InMemoryCustomizer::Initialize(const CustomizationConfig &config)
     // Build node filters (cached — only depends on topology)
     node_filters_ = util::excludeFlagsToNodeFilter(node_weights.size(), node_data, properties);
 
-    // Build the MLD graph (split → sort → construct)
+    // Build the MLD graph using no-merge split to keep stable topology
     auto directed = partitioner::splitBidirectionalEdges(edge_based_edge_list);
-    auto tidied = partitioner::prepareEdgesForUsageInGraph<
+    auto tidied = prepareEdgesNoMerge<
         typename partitioner::MultiLevelEdgeBasedGraph::InputEdge>(std::move(directed));
     graph_ = partitioner::MultiLevelEdgeBasedGraph(mlp_, num_nodes_, tidied);
+
+    // Build edge mapping: original edge index → graph edge ID (per direction)
+    // The graph stores edges in the same order as `tidied`.  We re-split
+    // (without sorting) to build a turn_id→original_index lookup, then scan
+    // graph edges to populate the mapping.
+    {
+        // turn_id → original index  (turn_id is unique per edge)
+        std::unordered_map<NodeID, std::size_t> turn_to_orig;
+        turn_to_orig.reserve(edge_based_edge_list.size());
+        for (std::size_t i = 0; i < edge_based_edge_list.size(); ++i)
+            turn_to_orig[edge_based_edge_list[i].data.turn_id] = i;
+
+        edge_to_graph_fwd_.assign(edge_based_edge_list.size(), SPECIAL_EDGEID);
+        edge_to_graph_rev_.assign(edge_based_edge_list.size(), SPECIAL_EDGEID);
+
+        for (NodeID n = 0; n < graph_.GetNumberOfNodes(); ++n)
+        {
+            for (auto e : graph_.GetAdjacentEdgeRange(n))
+            {
+                const auto &data = graph_.GetEdgeData(e);
+                auto it = turn_to_orig.find(data.turn_id);
+                if (it == turn_to_orig.end())
+                    continue;
+                auto orig_idx = it->second;
+                const auto &orig = edge_based_edge_list[orig_idx];
+
+                // Forward split: graph source == original source
+                // Reverse split: graph source == original target
+                if (n == orig.source)
+                    edge_to_graph_fwd_[orig_idx] = e;
+                else if (n == orig.target)
+                    edge_to_graph_rev_[orig_idx] = e;
+            }
+        }
+    }
 
     // Run initial cell customization (all filters — cold start)
     latest_metrics_ = customizeAllFilters(graph_, storage_, CellCustomizer{mlp_}, node_filters_);
@@ -121,17 +202,37 @@ double InMemoryCustomizer::Recustomize(const std::string &speed_csv_path,
     updater.LoadAndUpdateEdgeExpandedGraph(
         edge_based_edge_list, node_weights, node_durations, checksum);
 
-    std::vector<EdgeDistance> node_distances;
-    extractor::files::readEdgeBasedNodeDistances(config_.GetPath(".osrm.enw"), node_distances);
-
     for (auto &w : node_weights)
         w &= EdgeWeight{0x7fffffff};
 
-    // Rebuild graph with new weights (topology unchanged, weights differ)
-    auto directed = partitioner::splitBidirectionalEdges(edge_based_edge_list);
-    auto tidied = partitioner::prepareEdgesForUsageInGraph<
-        typename partitioner::MultiLevelEdgeBasedGraph::InputEdge>(std::move(directed));
-    graph_ = partitioner::MultiLevelEdgeBasedGraph(mlp_, num_nodes_, tidied);
+    // Patch edge weights in-place on the cached graph (skip full rebuild)
+    tbb::parallel_for(
+        tbb::blocked_range<std::size_t>(0, edge_based_edge_list.size()),
+        [&](const auto &range)
+        {
+            for (auto i = range.begin(); i < range.end(); ++i)
+            {
+                const auto &edge = edge_based_edge_list[i];
+                const auto new_weight = std::max(edge.data.weight, EdgeWeight{1});
+                const auto new_duration = to_alias<EdgeDuration>(edge.data.duration);
+                const auto new_distance = edge.data.distance;
+
+                if (auto fwd = edge_to_graph_fwd_[i]; fwd != SPECIAL_EDGEID)
+                {
+                    auto &data = graph_.GetEdgeData(fwd);
+                    data.weight = new_weight;
+                    data.duration = from_alias<EdgeDuration::value_type>(new_duration);
+                    data.distance = new_distance;
+                }
+                if (auto rev = edge_to_graph_rev_[i]; rev != SPECIAL_EDGEID)
+                {
+                    auto &data = graph_.GetEdgeData(rev);
+                    data.weight = new_weight;
+                    data.duration = from_alias<EdgeDuration::value_type>(new_duration);
+                    data.distance = new_distance;
+                }
+            }
+        });
 
     // Run cell Dijkstra — either all filters or a selected subset
     TIMER_START(cell_customize);
