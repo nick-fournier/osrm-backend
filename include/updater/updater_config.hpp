@@ -65,6 +65,10 @@ struct UpdaterConfig final : storage::IOConfig
     double log_edge_updates_factor = 0.0;
     std::time_t valid_now;
 
+    // When true, skip writing modified segment data back to .osrm.geometry.
+    // Used by InMemoryCustomizer to keep extraction files immutable.
+    bool skip_geometry_write = false;
+
     std::vector<std::string> segment_speed_lookup_paths;
     std::vector<std::string> turn_penalty_lookup_paths;
     std::string tz_file_path;

@@ -410,7 +410,8 @@ void saveDatasourcesNames(const UpdaterConfig &config)
         source++;
     }
 
-    extractor::files::writeDatasources(config.GetPath(".osrm.datasource_names"), sources);
+    if (!config.skip_geometry_write)
+        extractor::files::writeDatasources(config.GetPath(".osrm.datasource_names"), sources);
 }
 
 std::vector<std::uint64_t>
@@ -623,8 +624,9 @@ Updater::LoadAndUpdateEdgeExpandedGraph(std::vector<extractor::EdgeBasedEdge> &e
                                              segment_data,
                                              coordinates,
                                              osm_node_ids);
-        // Now save out the updated compressed geometries
-        extractor::files::writeSegmentData(config.GetPath(".osrm.geometry"), segment_data);
+        // Write updated geometries to disk unless caller wants files immutable
+        if (!config.skip_geometry_write)
+            extractor::files::writeSegmentData(config.GetPath(".osrm.geometry"), segment_data);
         TIMER_STOP(segment);
         util::Log() << "Updating segment data took " << TIMER_MSEC(segment) << "ms.";
     }

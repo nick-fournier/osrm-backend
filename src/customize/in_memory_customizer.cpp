@@ -60,7 +60,10 @@ void InMemoryCustomizer::Initialize(const CustomizationConfig &config)
     extractor::files::readProfileProperties(config.GetPath(".osrm.properties"), properties);
 
     // Build the first graph via the updater (full path: CSV → edges → graph)
-    updater::Updater updater(config.updater_config);
+    // skip_geometry_write: keep extraction files immutable
+    auto init_updater_config = config.updater_config;
+    init_updater_config.skip_geometry_write = true;
+    updater::Updater updater(init_updater_config);
     std::vector<extractor::EdgeBasedEdge> edge_based_edge_list;
     std::vector<EdgeWeight> node_weights;
     std::vector<EdgeDuration> node_durations;
@@ -103,6 +106,7 @@ double InMemoryCustomizer::Recustomize(const std::string &speed_csv_path)
 
     // Re-run the updater with new speed CSV → fresh edge weights
     auto updater_config = config_.updater_config;
+    updater_config.skip_geometry_write = true;
     if (!speed_csv_path.empty())
         updater_config.segment_speed_lookup_paths = {speed_csv_path};
     else
