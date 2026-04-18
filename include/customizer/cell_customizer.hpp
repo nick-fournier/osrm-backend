@@ -143,6 +143,39 @@ class CellCustomizer
         }
     }
 
+    /// Selective overload: only recompute cells in dirty_cells_per_level.
+    /// dirty_cells_per_level[L] contains the CellIDs that need recomputation at level L.
+    /// Levels are 1-indexed (matching MLD convention); index 0 is unused.
+    template <typename GraphT>
+    void Customize(const GraphT &graph,
+                   const partitioner::CellStorage &cells,
+                   const std::vector<bool> &allowed_nodes,
+                   CellMetric &metric,
+                   const std::vector<std::vector<CellID>> &dirty_cells_per_level) const
+    {
+        Heap heap_exemplar(graph.GetNumberOfNodes());
+        HeapPtr heaps(heap_exemplar);
+
+        for (std::size_t level = 1; level < partition.GetNumberOfLevels(); ++level)
+        {
+            if (level >= dirty_cells_per_level.size() || dirty_cells_per_level[level].empty())
+                continue;
+
+            const auto &dirty = dirty_cells_per_level[level];
+            tbb::parallel_for(tbb::blocked_range<std::size_t>(0, dirty.size()),
+                              [&](const tbb::blocked_range<std::size_t> &range)
+                              {
+                                  auto &heap = heaps.local();
+                                  for (auto idx = range.begin(), end = range.end(); idx != end; ++idx)
+                                  {
+                                      Customize(
+                                          graph, heap, cells, allowed_nodes, metric,
+                                          level, dirty[idx]);
+                                  }
+                              });
+        }
+    }
+
   private:
     template <typename GraphT>
     void RelaxNode(const GraphT &graph,

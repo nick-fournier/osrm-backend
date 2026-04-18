@@ -105,6 +105,27 @@ template <typename Key, typename Value> struct CSVFilesParser
             boost::iostreams::mapped_file_source mmap(filename);
             auto first = mmap.begin(), last = mmap.end();
 
+            // Guard against null bytes (e.g. from tmpfs pre-allocation artifacts)
+            auto null_pos = std::find(first, last, '\0');
+            if (null_pos != last)
+            {
+                // Find where valid data resumes after null block
+                auto resume = std::find_if(null_pos, last, [](char c) { return c != '\0'; });
+                if (resume == last)
+                {
+                    // Trailing nulls only — just truncate
+                    last = null_pos;
+                }
+                else
+                {
+                    // Nulls in middle — parse up to the null block only (conservative)
+                    util::Log(logWARNING) << "CSV file " << filename
+                        << " contains null bytes at offset " << (null_pos - first)
+                        << ", truncating to " << (null_pos - first) << " bytes";
+                    last = null_pos;
+                }
+            }
+
             BOOST_ASSERT(file_id <= std::numeric_limits<std::uint8_t>::max());
             ValueRule value_source =
                 value_rule[qi::_val = qi::_1, bind(&Value::source, qi::_val) = file_id];
